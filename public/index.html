@@ -1,370 +1,261 @@
 <!doctype html>
 <html lang="ru">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>IT Landscape — Popover only</title>
-
-  <!-- Cytoscape from CDN -->
-  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <title>IT Landscape</title>
 
   <style>
-    html, body { width: 100%; height: 100%; margin: 0; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #ffffff; }
+    html, body { width:100%; height:100%; margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #cy { width:100%; height:100%; background:#ffffff; }
 
-    /* Cytoscape container */
-    #cy {
-      width: 100%;
-      height: 100%;
-      background: #ffffff;
-    }
-
-    /* Popover (DOM) */
+    /* Popover (база сразу больше ~в 3 раза) */
     #popover {
       position: fixed;
-      left: 16px;
+      right: 16px;
       top: 16px;
-      width: 560px;
-      max-width: min(560px, 48vw);
-      max-height: 80vh;
+      width: 720px;            /* было ~420 */
+      max-height: 85vh;
       overflow: auto;
-
       background: #fff;
       color: #111;
-      border: 1px solid #e5e7eb;
+      border: 1px solid #d0d0d0;
       border-radius: 14px;
-      padding: 14px;
+      padding: 16px;
       display: none;
-
-      box-shadow: 0 12px 30px rgba(0,0,0,.12);
+      box-shadow: 0 12px 30px rgba(0,0,0,.18);
       z-index: 9999;
 
-      transform-origin: top left;
-      will-change: transform;
+      transform-origin: top right;
+      transform: scale(var(--uiScale, 1));
     }
 
-    #popoverHeader {
-      display: flex;
-      align-items: start;
-      justify-content: space-between;
-      gap: 10px;
-    }
 
-    #popover h3 {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.2;
-    }
-
-    #popover .meta {
-      margin-top: 4px;
-      font-size: 12px;
-      opacity: .7;
-    }
-
-    #popover table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      margin-top: 10px;
-    }
-
-    #popover td {
-      padding: 7px 8px;
-      border-top: 1px solid #eee;
-      vertical-align: top;
-      word-break: break-word;
-    }
-
-    #popover td.key {
-      width: 38%;
-      color: #2563eb;
-      font-weight: 650;
-    }
-
-    .btn {
+    #popover h3 { margin: 0; font-size: 22px; }
+    #popover .meta { opacity: .7; font-size: 14px; margin-top: 4px; }
+    #popover table { width:100%; border-collapse: collapse; font-size: 16px; margin-top: 10px; }
+    #popover td { padding: 10px 10px; border-top: 1px solid #eee; vertical-align: top; }
+    #popover td.key { width: 35%; color:#0b5bd3; font-weight: 600; }
+    #popover .close {
+      position: sticky;
+      top: 0;
+      float: right;
       cursor: pointer;
-      background: #f3f4f6;
-      color: #111;
-      border: 1px solid #e5e7eb;
-      padding: 6px 10px;
+      background: #f5f5f5;
+      border: 1px solid #ddd;
       border-radius: 10px;
-      font-size: 12px;
-      user-select: none;
+      padding: 6px 10px;
+      font-size: 14px;
     }
-    .btn:hover { background: #e9eef6; }
+    #popover .close:hover { background:#efefef; }
   </style>
+
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
 </head>
 
 <body>
   <div id="cy"></div>
 
-  <!-- Popover -->
   <div id="popover">
-    <div id="popoverHeader">
-      <div>
-        <h3 id="popTitle">—</h3>
-        <div class="meta" id="popMeta">—</div>
-      </div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <div class="btn" id="popPinBtn" title="Закрепить (не закрывать при уходе мыши)">Pin</div>
-        <div class="btn" id="popCloseBtn" title="Закрыть">✕</div>
-      </div>
-    </div>
-
-    <table id="popTable"></table>
+    <button class="close" id="popClose">✕</button>
+    <div id="popContent"></div>
   </div>
 
   <script>
-    // -----------------------------
-    // 1) Demo data (можно заменить на данные из Aura позже)
-    // -----------------------------
-    const graphData = {
-      nodes: [
-        { id: 'sap',   label: 'SAP',     kind: 'system', props: { sourceSystem: 'SAP',   owner: 'IT', description: 'Source of HR master data' },
-          dataAttributes: ["Anzeigename","Vorname","Nachname","Abteilung","Mitarbeiter-ID","Einstellungsdatum","Manager","Bürostandort","Straße","Ort"] },
+    const pop = document.getElementById('popover');
+    const popContent = document.getElementById('popContent');
+    document.getElementById('popClose').addEventListener('click', () => pop.style.display = 'none');
 
-        { id: 'entra', label: 'Entra',   kind: 'system', props: { sourceSystem: 'Entra', owner: 'IAM', description: 'Identity directory' },
-          dataAttributes: ["Benutzerprinzipalname","Objekt-ID","E-Mail-Adresse","Konto aktiviert","Benutzertyp","Land","Kanton"] },
+    function setUiScale(scale) {
+      // scale для popover — через CSS переменную
+      pop.style.setProperty('--uiScale', String(scale));
+    }
 
-        { id: 'm42',   label: 'Matrix42', kind: 'system', props: { sourceSystem: 'Matrix42', owner: 'ITSM', description: 'ITSM / CMDB' },
-          dataAttributes: ["Display name","First name","Last name","Title","Department","Status"] },
-      ],
-      edges: [
-        { id: 'f1', source: 'sap', target: 'entra', kind: 'flow', label: 'DATA_FLOW',
-          mappings: ["Vorname → Vorname", "Nachname → Nachname", "Mitarbeiter-ID → Mitarbeiter-ID", "Abteilung → Abteilung"] },
+    function safeArr(v) { return Array.isArray(v) ? v : []; }
 
-        { id: 'f2', source: 'entra', target: 'm42', kind: 'flow', label: 'DATA_FLOW',
-          mappings: ["Anzeigename → Display name", "Position → Title", "Konto aktiviert → Status"] },
-      ]
-    };
+    function renderPopoverForNode(node) {
+      const d = node.data();
+      const title = d.label || d.id;
+      const attrs = safeArr(d.dataAttributes);
 
-    // -----------------------------
-    // 2) Helpers: popover render
-    // -----------------------------
-    const popover = document.getElementById('popover');
-    const popTitle = document.getElementById('popTitle');
-    const popMeta  = document.getElementById('popMeta');
-    const popTable = document.getElementById('popTable');
-    const popCloseBtn = document.getElementById('popCloseBtn');
-    const popPinBtn = document.getElementById('popPinBtn');
-
-    let pinned = false;
-    let hideTimer = null;
-
-    function kvRows(obj) {
-      const rows = [];
-      for (const [k,v] of Object.entries(obj || {})) {
-        rows.push(`<tr><td class="key">${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`);
+      let rows = '';
+      for (const a of attrs) {
+        rows += `<tr><td class="key">Attribute</td><td>${escapeHtml(String(a))}</td></tr>`;
       }
-      return rows.join('');
-    }
 
-    function listRows(title, arr) {
-      if (!arr || !arr.length) return '';
-      const rows = arr.map(x => `<tr><td class="key">•</td><td>${escapeHtml(String(x))}</td></tr>`).join('');
-      return `
-        <tr><td class="key" colspan="2" style="padding-top:12px; color:#111; font-weight:800; border-top:none;">
-          ${escapeHtml(title)}
-        </td></tr>
-        ${rows}
+      popContent.innerHTML = `
+        <h3>${escapeHtml(title)}</h3>
+        <div class="meta">Тип: System</div>
+        <table>
+          ${attrs.length ? rows : `<tr><td class="key">Attribute</td><td><i>нет</i></td></tr>`}
+        </table>
       `;
+      pop.style.display = 'block';
     }
 
-    function showPopoverForNode(node) {
-      clearTimeout(hideTimer);
+    function renderPopoverForEdge(edge) {
+      const d = edge.data();
+      const title = d.label || d.kind || 'Edge';
+      const maps = safeArr(d.mappings);
 
-      const label = node.data('label') ?? node.id();
-      const kind  = node.data('kind') ?? 'node';
+      let rows = '';
+      for (const m of maps) {
+        rows += `<tr><td class="key">Mapping</td><td>${escapeHtml(String(m))}</td></tr>`;
+      }
 
-      popTitle.textContent = label;
-      popMeta.textContent  = `Type: ${kind}   •   id: ${node.id()}`;
-
-      // Содержимое: props + dataAttributes
-      const props = node.data('props') || {};
-      const attrs = node.data('dataAttributes') || [];
-
-      popTable.innerHTML =
-        kvRows(props) +
-        listRows('Attributes', attrs);
-
-      popover.style.display = 'block';
-    }
-
-    function showPopoverForEdge(edge) {
-      clearTimeout(hideTimer);
-
-      const label = edge.data('label') ?? 'Edge';
-      const kind  = edge.data('kind') ?? 'edge';
-
-      popTitle.textContent = label;
-      popMeta.textContent  = `Type: ${kind}   •   ${edge.source().data('label') || edge.source().id()} → ${edge.target().data('label') || edge.target().id()}`;
-
-      const mappings = edge.data('mappings') || [];
-      const props = edge.data('props') || {};
-
-      popTable.innerHTML =
-        kvRows(props) +
-        listRows('Mappings', mappings);
-
-      popover.style.display = 'block';
-    }
-
-    function scheduleHidePopover() {
-      if (pinned) return;
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => {
-        popover.style.display = 'none';
-      }, 120);
+      popContent.innerHTML = `
+        <h3>${escapeHtml(title)}</h3>
+        <div class="meta">${escapeHtml(d.source || '')} → ${escapeHtml(d.target || '')}</div>
+        <table>
+          ${maps.length ? rows : `<tr><td class="key">Mapping</td><td><i>нет</i></td></tr>`}
+        </table>
+      `;
+      pop.style.display = 'block';
     }
 
     function escapeHtml(s) {
-      return s.replace(/[&<>"']/g, ch => ({
-        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-      }[ch]));
+      return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     }
 
-    popCloseBtn.addEventListener('click', () => {
-      pinned = false;
-      popPinBtn.textContent = 'Pin';
-      popover.style.display = 'none';
-    });
-
-    popPinBtn.addEventListener('click', () => {
-      pinned = !pinned;
-      popPinBtn.textContent = pinned ? 'Unpin' : 'Pin';
-      if (!pinned) scheduleHidePopover();
-    });
-
-    popover.addEventListener('mouseenter', () => {
-      clearTimeout(hideTimer);
-    });
-    popover.addEventListener('mouseleave', () => {
-      scheduleHidePopover();
-    });
-
-    // -----------------------------
-    // 3) Popover scale sync with browser zoom
-    // -----------------------------
-    function syncPopoverWithZoom() {
-      const dpr = window.devicePixelRatio || 1;
-      const scale = 1 / dpr;
-      popover.style.transform = `scale(${scale})`;
+    async function loadGraph() {
+      const res = await fetch('/api/graph', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
     }
-    syncPopoverWithZoom();
-    window.addEventListener('resize', syncPopoverWithZoom);
 
-    // -----------------------------
-    // 4) Cytoscape init
-    // -----------------------------
-    const elements = [
-      ...graphData.nodes.map(n => ({ data: n })),
-      ...graphData.edges.map(e => ({ data: e }))
-    ];
+    (async () => {
+      let graph;
+      try {
+        graph = await loadGraph();
+      } catch (e) {
+        document.body.innerHTML = `<pre style="padding:16px;color:#b00">Не удалось загрузить /api/graph: ${String(e)}</pre>`;
+        return;
+      }
 
-    const cy = cytoscape({
-      container: document.getElementById('cy'),
-      elements,
-      style: [
-        // Nodes — circles
-        {
-          selector: 'node[kind="system"]',
-          style: {
-            'shape': 'ellipse',
-            'background-color': '#2f8ad6',
-            'border-color': '#1f5f96',
-            'border-width': 2,
-
-            'label': 'data(label)',
-            'color': '#0b1220',
-            'font-weight': 800,
-            'text-valign': 'center',
-            'text-halign': 'center',
-
-            // Текст без контуров:
-            'text-outline-width': 0,
-
-            // Узел не огромный:
-            'width': 120,
-            'height': 120,
-
-            // Внутренние отступы (визуально)
-            'padding': '12px',
-
-            // Важно: чтобы длинные слова переносились
-            'text-wrap': 'wrap',
-            'text-max-width': 95
-          }
-        },
-
-        // Edges
-        {
-          selector: 'edge[kind="flow"]',
-          style: {
-            'curve-style': 'bezier',
-            'line-color': '#1f5f96',
-            'width': 4,
-
-            'target-arrow-shape': 'triangle',
-            'target-arrow-color': '#1f5f96',
-            'arrow-scale': 1.2,
-
-            'label': 'data(label)',
-            'font-size': 14,
-            'color': '#334155',
-            'text-outline-width': 0,
-            'text-background-color': '#ffffff',
-            'text-background-opacity': 1,
-            'text-background-padding': '3px'
-          }
-        },
-
-        // Hover highlight
-        {
-          selector: 'node.hovered',
-          style: { 'border-width': 6 }
-        },
-        {
-          selector: 'edge.hovered',
-          style: { 'width': 6 }
+      // Подготовим элементы: считаем длину label, чтобы под неё масштабировать круг/шрифт
+      for (const el of graph.elements || []) {
+        if (el.data && el.data.kind === 'system') {
+          const label = String(el.data.label || el.data.id || '');
+          el.data.labelLen = label.length;
         }
-      ],
-      layout: { name: 'breadthfirst', directed: true, padding: 50, spacingFactor: 1.6 }
-    });
+      }
 
-    // -----------------------------
-    // 5) Hover behavior (popover on hover)
-    // -----------------------------
-    cy.on('mouseover', 'node', (evt) => {
-      const n = evt.target;
-      n.addClass('hovered');
-      showPopoverForNode(n);
-    });
+      const cy = cytoscape({
+        container: document.getElementById('cy'),
+        elements: graph.elements || [],
+        style: [
+          { selector: 'core', style: { 'background-color': '#ffffff' } },
 
-    cy.on('mouseout', 'node', (evt) => {
-      evt.target.removeClass('hovered');
-      scheduleHidePopover();
-    });
+          // SYSTEM nodes: круг, размер зависит от длины текста
+          {
+            selector: 'node[kind="system"]',
+            style: {
+              'shape': 'ellipse',
+              'background-color': '#2f80ed',
+              'border-color': '#1f5fb3',
+              'border-width': 2,
 
-    cy.on('mouseover', 'edge', (evt) => {
-      const e = evt.target;
-      e.addClass('hovered');
-      showPopoverForEdge(e);
-    });
+              'label': 'data(label)',
+              'text-valign': 'center',
+              'text-halign': 'center',
+              'color': '#0b0b0b',          // без белых контуров
+              'font-weight': 700,
+              'text-wrap': 'wrap',
+              'text-max-width': '90px',
 
-    cy.on('mouseout', 'edge', (evt) => {
-      evt.target.removeClass('hovered');
-      scheduleHidePopover();
-    });
+              // круг растёт под длину
+              'width':  'mapData(labelLen, 3, 20, 54, 130)',
+              'height': 'mapData(labelLen, 3, 20, 54, 130)',
 
-    // Чтобы клик по пустому месту закрывал (если не pinned)
-    cy.on('tap', (evt) => {
-      if (evt.target === cy && !pinned) popover.style.display = 'none';
-    });
+              // шрифт уменьшается под длину
+              'font-size': 'mapData(labelLen, 3, 20, 18, 10)',
 
-    // Небольшой zoom по умолчанию, чтобы всё красиво помещалось
-    cy.zoom(1.05);
-    cy.center();
+              'overlay-opacity': 0
+            }
+          },
+
+          // DATA_FLOW edges
+          {
+            selector: 'edge[kind="flow"]',
+            style: {
+              'line-color': '#1f5fb3',
+              'target-arrow-color': '#1f5fb3',
+              'target-arrow-shape': 'triangle',
+              'arrow-scale': 1.2,
+              'curve-style': 'bezier',
+              'width': 3,
+
+              'label': 'data(label)',
+              'font-size': 12,
+              'color': '#1f5fb3',
+              'text-background-color': '#ffffff',
+              'text-background-opacity': 1,
+              'text-background-padding': '2px',
+              'text-rotation': 'autorotate'
+            }
+          }
+        ],
+        layout: {
+          name: 'dagre',
+          rankDir: 'LR',
+          nodeSep: 70,
+          rankSep: 120,
+          padding: 40
+        }
+      });
+
+      // Popover scale зависит от zoom графа:
+      function updatePopoverScale() {
+        const z = cy.zoom();
+        // если граф отдалён (z<1) — popover увеличиваем, но с ограничениями
+        const scale = Math.min(2.8, Math.max(1.0, 1.0 / z));
+        setUiScale(scale);
+      }
+      updatePopoverScale();
+      cy.on('zoom', updatePopoverScale);
+
+      let lastHoverId = null;
+
+      // Hover по узлу: показать атрибуты
+      cy.on('mouseover', 'node[kind="system"]', (evt) => {
+        const n = evt.target;
+        lastHoverId = n.id();
+        renderPopoverForNode(n);
+      });
+
+      cy.on('mouseout', 'node[kind="system"]', (evt) => {
+        // чтобы popover не мигал при микродвижениях:
+        // закрываем, только если ушли с того же узла
+        if (lastHoverId === evt.target.id()) {
+          // небольшая задержка — если человек сразу идёт к popover
+          setTimeout(() => {
+            // если мышь сейчас над popover — не закрываем
+            const overPop = pop.matches(':hover');
+            if (!overPop) pop.style.display = 'none';
+          }, 120);
+        }
+      });
+
+      // Hover по ребру: показать mappings
+      cy.on('mouseover', 'edge[kind="flow"]', (evt) => {
+        renderPopoverForEdge(evt.target);
+      });
+
+      cy.on('mouseout', 'edge[kind="flow"]', () => {
+        setTimeout(() => {
+          const overPop = pop.matches(':hover');
+          if (!overPop) pop.style.display = 'none';
+        }, 120);
+      });
+
+      // Клик по фону — закрыть popover
+      cy.on('tap', (evt) => {
+        if (evt.target === cy) pop.style.display = 'none';
+      });
+    })();
   </script>
 </body>
 </html>
