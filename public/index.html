@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IT Landscape — Popover only</title>
+
+  <!-- Cytoscape from CDN -->
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #ffffff; }
+
+    /* Cytoscape container */
+    #cy {
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+    }
+
+    /* Popover (DOM) */
+    #popover {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      width: 560px;
+      max-width: min(560px, 48vw);
+      max-height: 80vh;
+      overflow: auto;
+
+      background: #fff;
+      color: #111;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 14px;
+      display: none;
+
+      box-shadow: 0 12px 30px rgba(0,0,0,.12);
+      z-index: 9999;
+
+      transform-origin: top left;
+      will-change: transform;
+    }
+
+    #popoverHeader {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    #popover h3 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    #popover .meta {
+      margin-top: 4px;
+      font-size: 12px;
+      opacity: .7;
+    }
+
+    #popover table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+
+    #popover td {
+      padding: 7px 8px;
+      border-top: 1px solid #eee;
+      vertical-align: top;
+      word-break: break-word;
+    }
+
+    #popover td.key {
+      width: 38%;
+      color: #2563eb;
+      font-weight: 650;
+    }
+
+    .btn {
+      cursor: pointer;
+      background: #f3f4f6;
+      color: #111;
+      border: 1px solid #e5e7eb;
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      user-select: none;
+    }
+    .btn:hover { background: #e9eef6; }
+  </style>
+</head>
+
+<body>
+  <div id="cy"></div>
+
+  <!-- Popover -->
+  <div id="popover">
+    <div id="popoverHeader">
+      <div>
+        <h3 id="popTitle">—</h3>
+        <div class="meta" id="popMeta">—</div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div class="btn" id="popPinBtn" title="Закрепить (не закрывать при уходе мыши)">Pin</div>
+        <div class="btn" id="popCloseBtn" title="Закрыть">✕</div>
+      </div>
+    </div>
+
+    <table id="popTable"></table>
+  </div>
+
+  <script>
+    // -----------------------------
+    // 1) Demo data (можно заменить на данные из Aura позже)
+    // -----------------------------
+    const graphData = {
+      nodes: [
+        { id: 'sap',   label: 'SAP',     kind: 'system', props: { sourceSystem: 'SAP',   owner: 'IT', description: 'Source of HR master data' },
+          dataAttributes: ["Anzeigename","Vorname","Nachname","Abteilung","Mitarbeiter-ID","Einstellungsdatum","Manager","Bürostandort","Straße","Ort"] },
+
+        { id: 'entra', label: 'Entra',   kind: 'system', props: { sourceSystem: 'Entra', owner: 'IAM', description: 'Identity directory' },
+          dataAttributes: ["Benutzerprinzipalname","Objekt-ID","E-Mail-Adresse","Konto aktiviert","Benutzertyp","Land","Kanton"] },
+
+        { id: 'm42',   label: 'Matrix42', kind: 'system', props: { sourceSystem: 'Matrix42', owner: 'ITSM', description: 'ITSM / CMDB' },
+          dataAttributes: ["Display name","First name","Last name","Title","Department","Status"] },
+      ],
+      edges: [
+        { id: 'f1', source: 'sap', target: 'entra', kind: 'flow', label: 'DATA_FLOW',
+          mappings: ["Vorname → Vorname", "Nachname → Nachname", "Mitarbeiter-ID → Mitarbeiter-ID", "Abteilung → Abteilung"] },
+
+        { id: 'f2', source: 'entra', target: 'm42', kind: 'flow', label: 'DATA_FLOW',
+          mappings: ["Anzeigename → Display name", "Position → Title", "Konto aktiviert → Status"] },
+      ]
+    };
+
+    // -----------------------------
+    // 2) Helpers: popover render
+    // -----------------------------
+    const popover = document.getElementById('popover');
+    const popTitle = document.getElementById('popTitle');
+    const popMeta  = document.getElementById('popMeta');
+    const popTable = document.getElementById('popTable');
+    const popCloseBtn = document.getElementById('popCloseBtn');
+    const popPinBtn = document.getElementById('popPinBtn');
+
+    let pinned = false;
+    let hideTimer = null;
+
+    function kvRows(obj) {
+      const rows = [];
+      for (const [k,v] of Object.entries(obj || {})) {
+        rows.push(`<tr><td class="key">${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`);
+      }
+      return rows.join('');
+    }
+
+    function listRows(title, arr) {
+      if (!arr || !arr.length) return '';
+      const rows = arr.map(x => `<tr><td class="key">•</td><td>${escapeHtml(String(x))}</td></tr>`).join('');
+      return `
+        <tr><td class="key" colspan="2" style="padding-top:12px; color:#111; font-weight:800; border-top:none;">
+          ${escapeHtml(title)}
+        </td></tr>
+        ${rows}
+      `;
+    }
+
+    function showPopoverForNode(node) {
+      clearTimeout(hideTimer);
+
+      const label = node.data('label') ?? node.id();
+      const kind  = node.data('kind') ?? 'node';
+
+      popTitle.textContent = label;
+      popMeta.textContent  = `Type: ${kind}   •   id: ${node.id()}`;
+
+      // Содержимое: props + dataAttributes
+      const props = node.data('props') || {};
+      const attrs = node.data('dataAttributes') || [];
+
+      popTable.innerHTML =
+        kvRows(props) +
+        listRows('Attributes', attrs);
+
+      popover.style.display = 'block';
+    }
+
+    function showPopoverForEdge(edge) {
+      clearTimeout(hideTimer);
+
+      const label = edge.data('label') ?? 'Edge';
+      const kind  = edge.data('kind') ?? 'edge';
+
+      popTitle.textContent = label;
+      popMeta.textContent  = `Type: ${kind}   •   ${edge.source().data('label') || edge.source().id()} → ${edge.target().data('label') || edge.target().id()}`;
+
+      const mappings = edge.data('mappings') || [];
+      const props = edge.data('props') || {};
+
+      popTable.innerHTML =
+        kvRows(props) +
+        listRows('Mappings', mappings);
+
+      popover.style.display = 'block';
+    }
+
+    function scheduleHidePopover() {
+      if (pinned) return;
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        popover.style.display = 'none';
+      }, 120);
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, ch => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[ch]));
+    }
+
+    popCloseBtn.addEventListener('click', () => {
+      pinned = false;
+      popPinBtn.textContent = 'Pin';
+      popover.style.display = 'none';
+    });
+
+    popPinBtn.addEventListener('click', () => {
+      pinned = !pinned;
+      popPinBtn.textContent = pinned ? 'Unpin' : 'Pin';
+      if (!pinned) scheduleHidePopover();
+    });
+
+    popover.addEventListener('mouseenter', () => {
+      clearTimeout(hideTimer);
+    });
+    popover.addEventListener('mouseleave', () => {
+      scheduleHidePopover();
+    });
+
+    // -----------------------------
+    // 3) Popover scale sync with browser zoom
+    // -----------------------------
+    function syncPopoverWithZoom() {
+      const dpr = window.devicePixelRatio || 1;
+      const scale = 1 / dpr;
+      popover.style.transform = `scale(${scale})`;
+    }
+    syncPopoverWithZoom();
+    window.addEventListener('resize', syncPopoverWithZoom);
+
+    // -----------------------------
+    // 4) Cytoscape init
+    // -----------------------------
+    const elements = [
+      ...graphData.nodes.map(n => ({ data: n })),
+      ...graphData.edges.map(e => ({ data: e }))
+    ];
+
+    const cy = cytoscape({
+      container: document.getElementById('cy'),
+      elements,
+      style: [
+        // Nodes — circles
+        {
+          selector: 'node[kind="system"]',
+          style: {
+            'shape': 'ellipse',
+            'background-color': '#2f8ad6',
+            'border-color': '#1f5f96',
+            'border-width': 2,
+
+            'label': 'data(label)',
+            'color': '#0b1220',
+            'font-weight': 800,
+            'text-valign': 'center',
+            'text-halign': 'center',
+
+            // Текст без контуров:
+            'text-outline-width': 0,
+
+            // Узел не огромный:
+            'width': 120,
+            'height': 120,
+
+            // Внутренние отступы (визуально)
+            'padding': '12px',
+
+            // Важно: чтобы длинные слова переносились
+            'text-wrap': 'wrap',
+            'text-max-width': 95
+          }
+        },
+
+        // Edges
+        {
+          selector: 'edge[kind="flow"]',
+          style: {
+            'curve-style': 'bezier',
+            'line-color': '#1f5f96',
+            'width': 4,
+
+            'target-arrow-shape': 'triangle',
+            'target-arrow-color': '#1f5f96',
+            'arrow-scale': 1.2,
+
+            'label': 'data(label)',
+            'font-size': 14,
+            'color': '#334155',
+            'text-outline-width': 0,
+            'text-background-color': '#ffffff',
+            'text-background-opacity': 1,
+            'text-background-padding': '3px'
+          }
+        },
+
+        // Hover highlight
+        {
+          selector: 'node.hovered',
+          style: { 'border-width': 6 }
+        },
+        {
+          selector: 'edge.hovered',
+          style: { 'width': 6 }
+        }
+      ],
+      layout: { name: 'breadthfirst', directed: true, padding: 50, spacingFactor: 1.6 }
+    });
+
+    // -----------------------------
+    // 5) Hover behavior (popover on hover)
+    // -----------------------------
+    cy.on('mouseover', 'node', (evt) => {
+      const n = evt.target;
+      n.addClass('hovered');
+      showPopoverForNode(n);
+    });
+
+    cy.on('mouseout', 'node', (evt) => {
+      evt.target.removeClass('hovered');
+      scheduleHidePopover();
+    });
+
+    cy.on('mouseover', 'edge', (evt) => {
+      const e = evt.target;
+      e.addClass('hovered');
+      showPopoverForEdge(e);
+    });
+
+    cy.on('mouseout', 'edge', (evt) => {
+      evt.target.removeClass('hovered');
+      scheduleHidePopover();
+    });
+
+    // Чтобы клик по пустому месту закрывал (если не pinned)
+    cy.on('tap', (evt) => {
+      if (evt.target === cy && !pinned) popover.style.display = 'none';
+    });
+
+    // Небольшой zoom по умолчанию, чтобы всё красиво помещалось
+    cy.zoom(1.05);
+    cy.center();
+  </script>
+</body>
+</html>
